@@ -21,6 +21,7 @@ build/
 .cache/
 
 # Runtime data
+data/
 *.db
 *.sqlite
 *.sqlite3

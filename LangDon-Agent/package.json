@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon backend/server.js",
-    "start":"node backend nserver.js"
+    "start": "node backend/server.js",
+    "test": "node --test backend/src/db/database.test.js"
   },
   "keywords": [],
   "author": "Joel B Eapen",
