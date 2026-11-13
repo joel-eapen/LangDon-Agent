@@ -1,0 +1,26 @@
+{
+  "name": "LangDon-Agent",
+  "version": "1.0.0",
+  "description": "A simple chat agent which has the ability to search the web",
+  "main": "index.js",
+  "scripts": {
+    "dev": "nodemon backend/server.js",
+    "start":"node backend nserver.js"
+  },
+  "keywords": [],
+  "author": "Joel B Eapen",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@openai/agents": "^0.22.0",
+    "better-sqlite3": "^13.1.1",
+    "chrono-node": "^2.10.3",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "openai": "^7.56.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
