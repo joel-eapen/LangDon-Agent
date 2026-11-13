@@ -1,18 +1,8 @@
 import 'dotenv/config';
-import express from 'express';
+import app from './src/app.js';
 import db from './src/db/index.js';
 
-const app = express();
 const port = process.env.PORT || 3000;
-
-app.get('/health', (_req, res) => {
-  const result = db.prepare('SELECT 1 AS ok').get();
-
-  res.json({
-    status: 'ok',
-    database: result.ok === 1 ? 'ok' : 'error',
-  });
-});
 
 const server = app.listen(port, () => {
   console.log(`Server listening on port ${port}`);

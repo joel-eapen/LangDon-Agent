@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon backend/server.js",
     "start": "node backend/server.js",
-    "test": "node --test backend/src/db/database.test.js"
+    "test": "node --test backend/src/db/database.test.js backend/src/auth.test.js"
   },
   "keywords": [],
   "author": "Joel B Eapen",
@@ -14,10 +14,15 @@
   "type": "module",
   "dependencies": {
     "@openai/agents": "^0.22.0",
+    "argon2": "^0.45.2",
     "better-sqlite3": "^13.1.1",
     "chrono-node": "^2.10.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
     "dotenv": "^18.0.10",
     "express": "^5.3.0",
+    "express-rate-limit": "^8.7.4",
+    "jsonwebtoken": "^9.0.3",
     "openai": "^7.56.0",
     "zod": "^4.6.7"
   },

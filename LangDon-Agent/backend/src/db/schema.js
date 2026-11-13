@@ -2,6 +2,9 @@ export const schema = `
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     external_id TEXT UNIQUE,
+    name TEXT,
+    email TEXT,
+    password_hash TEXT,
     timezone TEXT NOT NULL DEFAULT 'UTC',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -79,6 +82,19 @@ export const schema = `
     updated_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    refresh_token_hash TEXT NOT NULL UNIQUE,
+    previous_refresh_token_hash TEXT,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
   CREATE INDEX IF NOT EXISTS idx_conversations_user_updated
     ON conversations(user_id, updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_messages_conversation_ts
