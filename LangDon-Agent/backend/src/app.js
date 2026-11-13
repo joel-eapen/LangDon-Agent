@@ -4,6 +4,7 @@ import express from 'express';
 import db from './db/index.js';
 import authRoutes from './routes/auth.routes.js';
 import ApiError from './utils/api-error.js';
+import logger from './utils/logger.js';
 
 const app = express();
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
@@ -17,6 +18,18 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    logger.info('HTTP request completed', {
+      method: req.method,
+      path: req.originalUrl,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt,
+    });
+  });
+  next();
+});
 
 app.get('/health', (_req, res) => {
   const result = db.prepare('SELECT 1 AS ok').get();
@@ -33,7 +46,7 @@ app.use((error, _req, res, _next) => {
     return res.status(error.statusCode).json(error.toJSON());
   }
 
-  console.error(error);
+  logger.error('Unhandled request error', { error });
   return res.status(500).json({
     success: false,
     error: {

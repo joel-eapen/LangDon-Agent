@@ -10,7 +10,7 @@ const timezone = z.string().refine((value) => {
 }, 'Invalid IANA timezone');
 
 const password = z.string()
-  .min(12, 'Password must be at least 12 characters')
+  .min(6, 'Password must be at least 6 characters')
   .max(128, 'Password must not exceed 128 characters')
   .regex(/[a-z]/, 'Password must contain a lowercase letter')
   .regex(/[A-Z]/, 'Password must contain an uppercase letter')
