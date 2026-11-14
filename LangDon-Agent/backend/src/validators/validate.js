@@ -1,7 +1,7 @@
 import ApiError from "../utils/api-error.js";
 
-export const validate = (schema) => (req, _res, next) => {
-    const result = schema.safeParse(req.body);
+export const validate = (schema, source = "body") => (req, _res, next) => {
+    const result = schema.safeParse(req[source]);
 
     if (!result.success) {
         const errors = result.error.issues.map((issue) => ({
@@ -11,7 +11,7 @@ export const validate = (schema) => (req, _res, next) => {
         return next(new ApiError(400, "Validation failed", errors, "INVALID_REQUEST"));
     }
 
-    req.body = result.data;
+    req[source] = result.data;
     return next();
 };
 

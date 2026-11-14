@@ -175,6 +175,14 @@ export function listMessagesByConversation(conversationId, { limit = 100, offset
   `).all(conversationId, Math.max(1, limit), Math.max(0, offset));
 }
 
+export function countMessagesByConversation(conversationId) {
+  return db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM messages
+    WHERE conversation_id = ?
+  `).get(conversationId).count;
+}
+
 export function listMessagesByLocalDate(userId, localDate) {
   return db.prepare(`
     SELECT * FROM messages
