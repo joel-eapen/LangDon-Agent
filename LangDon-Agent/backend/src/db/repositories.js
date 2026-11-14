@@ -43,6 +43,29 @@ export function findConversationById(id) {
   return db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
 }
 
+export function findConversationSummaryById(id) {
+  return db.prepare(`
+    SELECT
+      conversations.title,
+      conversations.created_at,
+      conversations.updated_at,
+      conversations.last_message_at,
+      COUNT(messages.id) AS message_count
+    FROM conversations
+    LEFT JOIN messages ON messages.conversation_id = conversations.id
+    WHERE conversations.id = ?
+    GROUP BY conversations.id
+  `).get(id);
+}
+
+export function verifyConversationOwnership(userId, conversationId) {
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM conversations
+    WHERE id = ? AND user_id = ?
+  `).get(conversationId, userId));
+}
+
 export function listConversations(userId, { limit = 50, offset = 0 } = {}) {
   return db.prepare(`
     SELECT * FROM conversations
@@ -52,11 +75,28 @@ export function listConversations(userId, { limit = 50, offset = 0 } = {}) {
   `).all(userId, Math.max(1, limit), Math.max(0, offset));
 }
 
+export function countConversations(userId) {
+  return db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM conversations
+    WHERE user_id = ?
+  `).get(userId).count;
+}
+
 export function updateConversationTitle(id, title) {
   const result = db.prepare(`
     UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?
   `).run(title, nowUtc(), id);
   return result.changes ? findConversationById(id) : undefined;
+}
+
+export function deleteConversation(id) {
+  return db.transaction(() => {
+    db.prepare('DELETE FROM search_results WHERE conversation_id = ?').run(id);
+    db.prepare('DELETE FROM tool_calls WHERE conversation_id = ?').run(id);
+    db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(id);
+    return db.prepare('DELETE FROM conversations WHERE id = ?').run(id).changes > 0;
+  })();
 }
 
 export function updateLastMessageAt(id, timestamp = nowUtc()) {

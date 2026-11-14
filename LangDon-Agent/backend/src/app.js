@@ -3,6 +3,7 @@ import cors from 'cors';
 import express from 'express';
 import db from './db/index.js';
 import authRoutes from './routes/auth.routes.js';
+import convoRoutes from './routes/convo.routes.js';
 import ApiError from './utils/api-error.js';
 import logger from './utils/logger.js';
 
@@ -40,6 +41,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/conversations', convoRoutes);
 
 app.use((error, _req, res, _next) => {
   if (error instanceof ApiError) {

@@ -52,6 +52,28 @@ test('persists users, conversations, and timezone-aware message dates', () => {
   assert.equal(message.local_date, '2026-11-03');
   assert.equal(repository.listMessagesByLocalDate(user.id, '2026-11-03').length, 1);
   assert.equal(repository.findConversationById(conversation.id).last_message_at, message.ts_utc);
+
+  const summary = repository.findConversationSummaryById(conversation.id);
+  const updatedConversation = repository.findConversationById(conversation.id);
+  assert.equal(summary.title, null);
+  assert.equal(summary.created_at, conversation.created_at);
+  assert.equal(summary.updated_at, updatedConversation.updated_at);
+  assert.equal(summary.last_message_at, message.ts_utc);
+  assert.equal(summary.message_count, 1);
+});
+
+test('verifies conversation ownership by user and conversation id', () => {
+  const owner = repository.createUser();
+  const otherUser = repository.createUser();
+  const conversation = repository.createConversation({ userId: owner.id });
+  const emptyConversation = repository.createConversation({ userId: owner.id, title: 'Empty' });
+
+  assert.equal(repository.verifyConversationOwnership(owner.id, conversation.id), true);
+  assert.equal(repository.verifyConversationOwnership(otherUser.id, conversation.id), false);
+  assert.equal(repository.verifyConversationOwnership(owner.id, 'missing-conversation'), false);
+  assert.equal(repository.findConversationSummaryById(emptyConversation.id).message_count, 0);
+  assert.equal(repository.countConversations(owner.id), 2);
+  assert.equal(repository.countConversations(otherUser.id), 0);
 });
 
 test('stores tool calls and search results', () => {
@@ -87,6 +109,12 @@ test('stores tool calls and search results', () => {
   assert.equal(completed.status, 'completed');
   assert.equal(repository.listToolCallsByTurn('turn-2').length, 1);
   assert.equal(repository.listSearchResultsByToolCall(toolCall.id)[0].id, result.id);
+  assert.equal(repository.deleteConversation(conversation.id), true);
+  assert.equal(repository.findConversationById(conversation.id), undefined);
+  assert.equal(repository.findMessageById(message.id), undefined);
+  assert.equal(repository.findToolCallById(toolCall.id), undefined);
+  assert.equal(repository.findSearchResultById(result.id), undefined);
+  assert.equal(repository.deleteConversation(conversation.id), false);
 });
 
 test('keeps FTS synchronized when messages are inserted and deleted', () => {
