@@ -8,7 +8,7 @@
     "dev:client": "vite",
     "build": "vite build",
     "start": "node backend/server.js",
-    "test": "node --test backend/src/db/database.test.js backend/src/auth.test.js backend/src/history.integration.test.js"
+    "test": "node --test backend/src/db/database.test.js backend/src/auth.test.js backend/src/history.integration.test.js backend/src/modules/search/search.integration.test.js"
   },
   "keywords": [],
   "author": "Joel B Eapen",
