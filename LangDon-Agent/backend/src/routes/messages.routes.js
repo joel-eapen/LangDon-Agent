@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { validateMessage } from "../validators/message.validator";
+import { validateMessage } from "../validators/message.validator.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { addMessage,getAllMessages, getOneMessage } from "../controllers/message.controller.js";
 

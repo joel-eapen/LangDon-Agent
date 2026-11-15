@@ -107,8 +107,14 @@ export const schema = `
     ON messages(ts_utc);
   CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation_turn
     ON tool_calls(conversation_id, turn_id);
+  CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation_tool_started
+    ON tool_calls(conversation_id, tool_name, started_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_tool_calls_message
+    ON tool_calls(message_id);
   CREATE INDEX IF NOT EXISTS idx_search_results_tool_call
     ON search_results(tool_call_id);
+  CREATE INDEX IF NOT EXISTS idx_search_results_tool_call_retrieved
+    ON search_results(tool_call_id, retrieved_at);
   CREATE INDEX IF NOT EXISTS idx_search_results_conversation_turn
     ON search_results(conversation_id, turn_id);
   CREATE INDEX IF NOT EXISTS idx_daily_digests_user_date
@@ -133,5 +139,13 @@ export const schema = `
   AFTER DELETE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content, gist)
     VALUES ('delete', old.rowid, old.content, old.gist);
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS messages_fts_update
+  AFTER UPDATE OF content, gist ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content, gist)
+    VALUES ('delete', old.rowid, old.content, old.gist);
+    INSERT INTO messages_fts(rowid, content, gist)
+    VALUES (new.rowid, new.content, new.gist);
   END;
 `;

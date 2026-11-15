@@ -12,6 +12,7 @@ import {
 import asyncHandler from "../utils/async-handler.js";
 import ApiError from "../utils/api-error.js";
 import ApiResponse from "../utils/api-response.js";
+import { getConversationSearches } from "../services/conversation-search.service.js";
 
 const createConvo = asyncHandler((req, res) => {
     const userId = req.auth?.userId;
@@ -107,6 +108,17 @@ const getOneConvo = asyncHandler((req,res)=>{
     },"Converstaion metadata returned successfully"))
 });
 
+const getConversationSearchHistory = asyncHandler((req, res) => {
+    const data = getConversationSearches({
+        userId: req.auth?.userId,
+        conversationId: req.params.id,
+        page: req.query.page,
+        limit: req.query.limit,
+    });
+
+    return res.json(new ApiResponse(200, data, "Conversation searches retrieved successfully"));
+});
+
 const updateTitle = asyncHandler((req,res)=>{
     const {title} = req.body
     const {userId} = req.auth
@@ -171,10 +183,13 @@ const deleteConvo = asyncHandler((req,res)=>{
     },"Conversation has been deleted successfully"))
 });
 
+
+
 export {
     createConvo,
     getAllConvo,
     getOneConvo,
+    getConversationSearchHistory,
     updateTitle,
     deleteConvo
 };

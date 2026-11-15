@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import db from './index.js';
 import { localDateForTimezone, nowUtc } from '../utils/clock.js';
+import { normalizeSearchQuery } from '../utils/search-query.js';
 
 const createId = () => randomUUID();
 
@@ -64,6 +65,61 @@ export function verifyConversationOwnership(userId, conversationId) {
     FROM conversations
     WHERE id = ? AND user_id = ?
   `).get(conversationId, userId));
+}
+
+export function listConversationSearches({
+  userId,
+  conversationId,
+  toolName,
+  page = 1,
+  limit = 10,
+}) {
+  const pageNumber = Math.max(1, page);
+  const limitNumber = Math.min(50, Math.max(1, limit));
+  const offset = (pageNumber - 1) * limitNumber;
+
+  return db.transaction(() => {
+    const totalSearches = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM tool_calls
+      JOIN conversations ON conversations.id = tool_calls.conversation_id
+      WHERE conversations.id = ?
+        AND conversations.user_id = ?
+        AND tool_calls.tool_name = ?
+    `).get(conversationId, userId, toolName).count;
+
+    const toolCalls = db.prepare(`
+      SELECT tool_calls.*
+      FROM tool_calls
+      JOIN conversations ON conversations.id = tool_calls.conversation_id
+      WHERE conversations.id = ?
+        AND conversations.user_id = ?
+        AND tool_calls.tool_name = ?
+      ORDER BY tool_calls.started_at DESC, tool_calls.rowid DESC
+      LIMIT ? OFFSET ?
+    `).all(conversationId, userId, toolName, limitNumber, offset);
+
+    if (toolCalls.length === 0) {
+      return { totalSearches, toolCalls, searchResults: [] };
+    }
+
+    const toolCallIds = toolCalls.map(({ id }) => id);
+    const placeholders = toolCallIds.map(() => '?').join(', ');
+    const searchResults = db.prepare(`
+      SELECT search_results.*
+      FROM search_results
+      JOIN tool_calls ON tool_calls.id = search_results.tool_call_id
+      JOIN conversations ON conversations.id = search_results.conversation_id
+      WHERE conversations.id = ?
+        AND conversations.user_id = ?
+        AND tool_calls.tool_name = ?
+        AND tool_calls.id IN (${placeholders})
+        AND tool_calls.conversation_id = search_results.conversation_id
+      ORDER BY search_results.retrieved_at ASC, search_results.rowid ASC
+    `).all(conversationId, userId, toolName, ...toolCallIds);
+
+    return { totalSearches, toolCalls, searchResults };
+  })();
 }
 
 export function listConversations(userId, { limit = 50, offset = 0 } = {}) {
@@ -191,11 +247,135 @@ export function listMessagesByLocalDate(userId, localDate) {
   `).all(userId, localDate);
 }
 
+export function listMessageDates(userId) {
+  return db.prepare(`
+    SELECT local_date AS date, COUNT(*) AS message_count
+    FROM messages
+    WHERE user_id = ?
+    GROUP BY local_date
+    ORDER BY local_date DESC
+  `).all(userId);
+}
+
+export function listHistoricalSearches({
+  userId,
+  localDate,
+  toolName,
+  page = 1,
+  limit = 10,
+}) {
+  const pageNumber = Math.max(1, page);
+  const limitNumber = Math.min(50, Math.max(1, limit));
+  const offset = (pageNumber - 1) * limitNumber;
+
+  return db.transaction(() => {
+    const dateFilter = `
+      (
+        origin.local_date = ?
+        OR (
+          origin.id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM messages turn_message
+            WHERE turn_message.conversation_id = tool_calls.conversation_id
+              AND turn_message.turn_id = tool_calls.turn_id
+              AND turn_message.user_id = ?
+              AND turn_message.local_date = ?
+          )
+        )
+      )
+    `;
+    const filterParameters = [userId, toolName, localDate, userId, localDate];
+    const totalSearches = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM tool_calls
+      JOIN conversations
+        ON conversations.id = tool_calls.conversation_id
+      LEFT JOIN messages origin
+        ON origin.id = tool_calls.message_id
+       AND origin.conversation_id = tool_calls.conversation_id
+      WHERE conversations.user_id = ?
+        AND tool_calls.tool_name = ?
+        AND ${dateFilter}
+    `).get(...filterParameters).count;
+
+    const toolCalls = db.prepare(`
+      SELECT
+        tool_calls.*,
+        conversations.title AS conversation_title
+      FROM tool_calls
+      JOIN conversations
+        ON conversations.id = tool_calls.conversation_id
+      LEFT JOIN messages origin
+        ON origin.id = tool_calls.message_id
+       AND origin.conversation_id = tool_calls.conversation_id
+      WHERE conversations.user_id = ?
+        AND tool_calls.tool_name = ?
+        AND ${dateFilter}
+      ORDER BY tool_calls.started_at ASC, tool_calls.rowid ASC
+      LIMIT ? OFFSET ?
+    `).all(...filterParameters, limitNumber, offset);
+
+    if (toolCalls.length === 0) {
+      return { totalSearches, toolCalls, searchResults: [] };
+    }
+
+    const toolCallIds = toolCalls.map(({ id }) => id);
+    const placeholders = toolCallIds.map(() => '?').join(', ');
+    const searchResults = db.prepare(`
+      SELECT search_results.*
+      FROM search_results
+      JOIN tool_calls
+        ON tool_calls.id = search_results.tool_call_id
+      JOIN conversations
+        ON conversations.id = search_results.conversation_id
+      WHERE conversations.user_id = ?
+        AND tool_calls.tool_name = ?
+        AND tool_calls.conversation_id = search_results.conversation_id
+        AND search_results.tool_call_id IN (${placeholders})
+      ORDER BY search_results.retrieved_at ASC, search_results.rowid ASC
+    `).all(userId, toolName, ...toolCallIds);
+
+    return { totalSearches, toolCalls, searchResults };
+  })();
+}
+
 export function listMessagesByTurn(turnId) {
   return db.prepare(`
     SELECT * FROM messages WHERE turn_id = ?
     ORDER BY ts_utc ASC, rowid ASC
   `).all(turnId);
+}
+
+export function getTurnHistory(userId, turnId) {
+  const messages = db.prepare(`
+    SELECT messages.*
+    FROM messages
+    JOIN conversations ON conversations.id = messages.conversation_id
+    WHERE conversations.user_id = ? AND messages.turn_id = ?
+    ORDER BY messages.ts_utc ASC, messages.rowid ASC
+  `).all(userId, turnId);
+
+  const toolCalls = db.prepare(`
+    SELECT tool_calls.*
+    FROM tool_calls
+    JOIN conversations ON conversations.id = tool_calls.conversation_id
+    WHERE conversations.user_id = ? AND tool_calls.turn_id = ?
+    ORDER BY tool_calls.started_at ASC, tool_calls.rowid ASC
+  `).all(userId, turnId);
+
+  const searchResults = db.prepare(`
+    SELECT search_results.*
+    FROM search_results
+    JOIN tool_calls ON tool_calls.id = search_results.tool_call_id
+    JOIN conversations ON conversations.id = search_results.conversation_id
+    WHERE conversations.user_id = ?
+      AND tool_calls.turn_id = ?
+      AND tool_calls.conversation_id = search_results.conversation_id
+    ORDER BY search_results.retrieved_at ASC, search_results.rowid ASC
+  `).all(userId, turnId);
+
+  return { messages, toolCalls, searchResults };
 }
 
 export function listRecentMessages(conversationId, { limit = 20, offset = 0 } = {}) {
@@ -207,27 +387,76 @@ export function listRecentMessages(conversationId, { limit = 20, offset = 0 } = 
   `).all(conversationId, Math.max(1, limit), Math.max(0, offset));
 }
 
-export function searchMessages(query, { userId, conversationId, limit = 20 } = {}) {
-  const conditions = ['messages_fts MATCH ?'];
-  const parameters = [query];
-  if (userId) {
-    conditions.push('messages.user_id = ?');
-    parameters.push(userId);
+export function searchMessages({
+  userId,
+  query,
+  page = 1,
+  limit = 10,
+  role,
+  from,
+  to,
+  conversationId,
+}) {
+  const normalized = normalizeSearchQuery(query);
+  if (!normalized.ftsQuery) {
+    return { totalResults: 0, results: [] };
+  }
+
+  const conditions = [
+    'messages_fts MATCH ?',
+    'messages.user_id = ?',
+  ];
+  const filterParameters = [normalized.ftsQuery, userId];
+
+  if (role) {
+    conditions.push('messages.role = ?');
+    filterParameters.push(role);
+  }
+  if (from) {
+    conditions.push('messages.local_date >= ?');
+    filterParameters.push(from);
+  }
+  if (to) {
+    conditions.push('messages.local_date <= ?');
+    filterParameters.push(to);
   }
   if (conversationId) {
     conditions.push('messages.conversation_id = ?');
-    parameters.push(conversationId);
+    filterParameters.push(conversationId);
   }
-  parameters.push(Math.max(1, limit));
 
-  return db.prepare(`
-    SELECT messages.*, bm25(messages_fts) AS rank
+  const whereClause = conditions.join(' AND ');
+  const totalResults = db.prepare(`
+    SELECT COUNT(*) AS totalResults
     FROM messages_fts
     JOIN messages ON messages.rowid = messages_fts.rowid
-    WHERE ${conditions.join(' AND ')}
-    ORDER BY rank
-    LIMIT ?
-  `).all(...parameters);
+    WHERE ${whereClause}
+  `).get(...filterParameters).totalResults;
+
+  const pageNumber = Math.max(1, page);
+  const limitNumber = Math.min(50, Math.max(1, limit));
+  const offset = (pageNumber - 1) * limitNumber;
+  const results = db.prepare(`
+    SELECT
+      messages.id AS message_id,
+      messages.role,
+      messages.content,
+      messages.turn_id,
+      messages.ts_utc,
+      messages.local_date,
+      conversations.id AS conversation_id,
+      conversations.title AS conversation_title,
+      snippet(messages_fts, 0, '<mark>', '</mark>', '...', 12) AS matched_text,
+      bm25(messages_fts) AS relevance
+    FROM messages_fts
+    JOIN messages ON messages.rowid = messages_fts.rowid
+    JOIN conversations ON conversations.id = messages.conversation_id
+    WHERE ${whereClause}
+    ORDER BY relevance ASC, messages.ts_utc DESC, messages.rowid DESC
+    LIMIT ? OFFSET ?
+  `).all(...filterParameters, limitNumber, offset);
+
+  return { totalResults, results };
 }
 
 export function createToolCall({

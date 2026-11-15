@@ -14,6 +14,7 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
 db.exec(schema);
+db.exec(`INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')`);
 
 const userColumns = db.prepare('PRAGMA table_info(users)').all();
 const existingUserColumns = new Set(userColumns.map(({ name }) => name));
