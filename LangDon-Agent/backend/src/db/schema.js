@@ -43,6 +43,8 @@ export const schema = `
     result_summary TEXT,
     status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'incomplete')),
     started_at TEXT NOT NULL,
+    local_date TEXT,
+    timezone TEXT,
     completed_at TEXT,
     duration_ms INTEGER
   );
@@ -82,6 +84,23 @@ export const schema = `
     updated_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS fetch_results (
+    id TEXT PRIMARY KEY,
+    tool_call_id TEXT NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    turn_id TEXT,
+    url TEXT NOT NULL,
+    final_url TEXT,
+    title TEXT,
+    content TEXT,
+    content_format TEXT NOT NULL DEFAULT 'markdown',
+    content_hash TEXT,
+    status TEXT NOT NULL,
+    http_status INTEGER,
+    error_message TEXT,
+    retrieved_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -117,6 +136,10 @@ export const schema = `
     ON search_results(tool_call_id, retrieved_at);
   CREATE INDEX IF NOT EXISTS idx_search_results_conversation_turn
     ON search_results(conversation_id, turn_id);
+  CREATE INDEX IF NOT EXISTS idx_fetch_results_tool_call
+    ON fetch_results(tool_call_id);
+  CREATE INDEX IF NOT EXISTS idx_fetch_results_content_hash
+    ON fetch_results(content_hash);
   CREATE INDEX IF NOT EXISTS idx_daily_digests_user_date
     ON daily_digests(user_id, local_date);
   CREATE INDEX IF NOT EXISTS idx_user_memories_user

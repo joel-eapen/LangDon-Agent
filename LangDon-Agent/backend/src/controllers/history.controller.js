@@ -1,7 +1,7 @@
 import {
     findUserById,
     listMessagesByLocalDate,
-    listToolCallsByTurn,
+    listToolCallsByTurnForUser,
     listSearchResultsByToolCall,
     getTurnHistory,
 } from "../db/repositories.js"
@@ -32,7 +32,7 @@ const historyByDate = asyncHandler((req,res)=>{
     const turnIds = [...new Set(messages.map(message => message.turn_id))];
 
     const toolCalls = turnIds.flatMap(turnId =>{
-        return listToolCallsByTurn(turnId)
+        return listToolCallsByTurnForUser(userId, turnId)
     })
     
     const toolCallIds = [...new Set(toolCalls.map(toolCall => toolCall.id))]
@@ -88,8 +88,13 @@ const historyByTurnId = asyncHandler((req,res)=>{
         throw new ApiError(401,"Authentication is required",[],"AUTHENTICATION_REQUIRED")
     }
 
-    const { messages, toolCalls, searchResults } = getTurnHistory(userId, turnId);
-    if(messages.length === 0 && toolCalls.length === 0 && searchResults.length === 0){
+    const { messages, toolCalls, searchResults, fetchResults } = getTurnHistory(userId, turnId);
+    if(
+        messages.length === 0
+        && toolCalls.length === 0
+        && searchResults.length === 0
+        && fetchResults.length === 0
+    ){
         throw new ApiError(404,"Turn not found",[],"RESOURCE_NOT_FOUND")
     }
 
@@ -109,6 +114,11 @@ const historyByTurnId = asyncHandler((req,res)=>{
             timestamp: searchResult.retrieved_at,
             data: searchResult,
         })),
+        ...fetchResults.map((fetchResult) => ({
+            type: "fetch_result",
+            timestamp: fetchResult.retrieved_at,
+            data: fetchResult,
+        })),
     ].sort((first, second) =>
         first.timestamp.localeCompare(second.timestamp)
         || first.type.localeCompare(second.type)
@@ -119,6 +129,7 @@ const historyByTurnId = asyncHandler((req,res)=>{
         messages,
         toolCalls,
         searchResults,
+        fetchResults,
         events,
     }, "Turn history retrieved successfully"));
 });

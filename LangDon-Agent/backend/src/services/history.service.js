@@ -208,8 +208,13 @@ export function getHistoricalTurn({ userId, turnId }) {
         throw new ApiError(401, "Authentication is required", [], "AUTHENTICATION_REQUIRED");
     }
 
-    const { messages, toolCalls, searchResults } = getTurnHistory(userId, turnId);
-    if (messages.length === 0 && toolCalls.length === 0 && searchResults.length === 0) {
+    const { messages, toolCalls, searchResults, fetchResults } = getTurnHistory(userId, turnId);
+    if (
+        messages.length === 0
+        && toolCalls.length === 0
+        && searchResults.length === 0
+        && fetchResults.length === 0
+    ) {
         throw new ApiError(404, "Turn not found", [], "RESOURCE_NOT_FOUND");
     }
 
@@ -217,6 +222,7 @@ export function getHistoricalTurn({ userId, turnId }) {
         message: 0,
         tool_call: 1,
         search_result: 2,
+        fetch_result: 3,
     };
     const events = [
         ...messages.map((message) => ({
@@ -234,6 +240,11 @@ export function getHistoricalTurn({ userId, turnId }) {
             timestamp: searchResult.retrieved_at,
             data: searchResult,
         })),
+        ...fetchResults.map((fetchResult) => ({
+            type: "fetch_result",
+            timestamp: fetchResult.retrieved_at,
+            data: fetchResult,
+        })),
     ].sort((first, second) =>
         first.timestamp.localeCompare(second.timestamp)
         || eventOrder[first.type] - eventOrder[second.type]
@@ -244,6 +255,7 @@ export function getHistoricalTurn({ userId, turnId }) {
         messages,
         toolCalls,
         searchResults,
+        fetchResults,
         events,
     };
 }

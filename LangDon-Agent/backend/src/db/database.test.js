@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { applyMigrations } from './migrations.js';
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'langdon-db-'));
 process.env.DB_PATH = path.join(temporaryDirectory, 'test.sqlite');
@@ -13,6 +15,48 @@ const repository = await import('./repositories.js');
 test.after(() => {
   db.close();
   fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+});
+
+test('migrates a legacy tool_calls table without changing existing records', () => {
+  const legacyDb = new Database(':memory:');
+  legacyDb.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE users (id TEXT PRIMARY KEY, timezone TEXT NOT NULL);
+    CREATE TABLE conversations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id)
+    );
+    CREATE TABLE tool_calls (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id),
+      tool_name TEXT NOT NULL,
+      arguments_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at TEXT NOT NULL
+    );
+    INSERT INTO users VALUES ('user-1', 'UTC');
+    INSERT INTO conversations VALUES ('conversation-1', 'user-1');
+    INSERT INTO tool_calls VALUES (
+      'tool-1', 'conversation-1', 'tinyfish_search', '{}', 'completed',
+      '2026-11-15T00:00:00.000Z'
+    );
+  `);
+
+  applyMigrations(legacyDb);
+  assert.deepEqual(
+    legacyDb.prepare('SELECT id, started_at FROM tool_calls').get(),
+    { id: 'tool-1', started_at: '2026-11-15T00:00:00.000Z' },
+  );
+  assert.deepEqual(
+    legacyDb.prepare('PRAGMA table_info(tool_calls)').all()
+      .filter(({ name }) => ['local_date', 'timezone'].includes(name))
+      .map(({ name }) => name),
+    ['local_date', 'timezone'],
+  );
+  assert.equal(legacyDb.prepare(`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fetch_results'
+  `).get().name, 'fetch_results');
+  legacyDb.close();
 });
 
 test('initializes all tables, indexes, and FTS triggers', () => {
@@ -27,6 +71,7 @@ test('initializes all tables, indexes, and FTS triggers', () => {
     'messages',
     'tool_calls',
     'search_results',
+    'fetch_results',
     'daily_digests',
     'user_memories',
     'messages_fts',
@@ -34,6 +79,10 @@ test('initializes all tables, indexes, and FTS triggers', () => {
     assert.ok(tables.includes(table));
   }
   assert.equal(db.pragma('foreign_keys', { simple: true }), 1);
+  assert.ok(db.prepare(`
+    SELECT 1 FROM schema_migrations
+    WHERE id = '20261115_phase4_fetch_results'
+  `).get());
 });
 
 test('persists users, conversations, and timezone-aware message dates', () => {
@@ -119,6 +168,88 @@ test('stores tool calls and search results', () => {
   assert.equal(repository.findToolCallById(toolCall.id), undefined);
   assert.equal(repository.findSearchResultById(result.id), undefined);
   assert.equal(repository.deleteConversation(conversation.id), false);
+});
+
+test('stores tool execution timezone dates and preserves them after timezone changes', () => {
+  const user = repository.createUser({ timezone: 'Asia/Kolkata' });
+  const conversation = repository.createConversation({ userId: user.id });
+  const toolCall = repository.createToolCall({
+    conversationId: conversation.id,
+    turnId: 'timezone-turn',
+    toolName: 'tinyfish_fetch',
+    argumentsJson: { url: 'https://example.com' },
+    startedAt: '2026-11-02T18:45:00.000Z',
+  });
+
+  assert.equal(toolCall.started_at, '2026-11-02T18:45:00.000Z');
+  assert.equal(toolCall.local_date, '2026-11-03');
+  assert.equal(toolCall.timezone, 'Asia/Kolkata');
+
+  repository.updateUserTimezone(user.id, 'America/Los_Angeles');
+  const stored = repository.findToolCallById(toolCall.id);
+  assert.equal(stored.local_date, '2026-11-03');
+  assert.equal(stored.timezone, 'Asia/Kolkata');
+});
+
+test('stores and retrieves multiple fetch snapshots for one tool call', () => {
+  const user = repository.createUser();
+  const conversation = repository.createConversation({ userId: user.id });
+  const toolCall = repository.createToolCall({
+    conversationId: conversation.id,
+    turnId: 'fetch-turn',
+    toolName: 'tinyfish_fetch',
+    argumentsJson: { urls: ['https://example.com'] },
+  });
+
+  const first = repository.insertFetchResult({
+    toolCallId: toolCall.id,
+    conversationId: conversation.id,
+    turnId: toolCall.turn_id,
+    url: 'https://example.com',
+    content: '# First snapshot',
+    contentHash: 'hash-1',
+    status: 'completed',
+  });
+  const second = repository.insertFetchResult({
+    toolCallId: toolCall.id,
+    conversationId: conversation.id,
+    turnId: toolCall.turn_id,
+    url: 'https://example.com',
+    content: '# Second snapshot',
+    contentHash: 'hash-2',
+    status: 'completed',
+  });
+
+  assert.deepEqual(
+    repository.listFetchResultsByToolCall(toolCall.id).map(({ id }) => id),
+    [first.id, second.id],
+  );
+  assert.deepEqual(repository.listFetchResultsByToolCalls([]), []);
+});
+
+test('includes fetch results in turn history and cascades tool deletion', () => {
+  const user = repository.createUser();
+  const conversation = repository.createConversation({ userId: user.id });
+  const toolCall = repository.createToolCall({
+    conversationId: conversation.id,
+    turnId: 'fetch-history-turn',
+    toolName: 'tinyfish_fetch',
+    argumentsJson: { url: 'https://example.com' },
+  });
+  const fetchResult = repository.insertFetchResult({
+    toolCallId: toolCall.id,
+    conversationId: conversation.id,
+    turnId: toolCall.turn_id,
+    url: 'https://example.com',
+    status: 'failed',
+    errorMessage: 'timeout',
+  });
+
+  const history = repository.getTurnHistory(user.id, 'fetch-history-turn');
+  assert.equal(history.fetchResults[0].id, fetchResult.id);
+
+  db.prepare('DELETE FROM tool_calls WHERE id = ?').run(toolCall.id);
+  assert.equal(repository.findFetchResultById(fetchResult.id), undefined);
 });
 
 test('retrieves user-scoped turn history with messages, tools, and results', () => {
@@ -250,26 +381,16 @@ test('lists paginated TinyFish searches and batches their results', () => {
   assert.equal(secondPage.searchResults.length, 0);
 });
 
-test('filters historical searches by the originating message local date', () => {
+test('filters historical searches by tool execution local date', () => {
   const user = repository.createUser({ timezone: 'Asia/Kolkata' });
   const conversation = repository.createConversation({ userId: user.id });
-  const message = repository.insertMessage({
-    conversationId: conversation.id,
-    userId: user.id,
-    turnId: 'dated-search-turn',
-    role: 'assistant',
-    content: 'Searching for Redis',
-    timezone: user.timezone,
-    tsUtc: '2026-11-02T20:00:00.000Z',
-  });
   const toolCall = repository.createToolCall({
     conversationId: conversation.id,
-    messageId: message.id,
-    turnId: message.turn_id,
+    turnId: 'dated-search-turn',
     toolName: 'tinyfish_search',
     argumentsJson: { query: 'Redis' },
     status: 'failed',
-    startedAt: '2026-11-02T20:01:00.000Z',
+    startedAt: '2026-11-02T18:45:00.000Z',
   });
 
   const history = repository.listHistoricalSearches({

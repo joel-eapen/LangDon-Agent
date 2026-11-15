@@ -269,31 +269,13 @@ export function listHistoricalSearches({
   const offset = (pageNumber - 1) * limitNumber;
 
   return db.transaction(() => {
-    const dateFilter = `
-      (
-        origin.local_date = ?
-        OR (
-          origin.id IS NULL
-          AND EXISTS (
-            SELECT 1
-            FROM messages turn_message
-            WHERE turn_message.conversation_id = tool_calls.conversation_id
-              AND turn_message.turn_id = tool_calls.turn_id
-              AND turn_message.user_id = ?
-              AND turn_message.local_date = ?
-          )
-        )
-      )
-    `;
-    const filterParameters = [userId, toolName, localDate, userId, localDate];
+    const dateFilter = 'tool_calls.local_date = ?';
+    const filterParameters = [userId, toolName, localDate];
     const totalSearches = db.prepare(`
       SELECT COUNT(*) AS count
       FROM tool_calls
       JOIN conversations
         ON conversations.id = tool_calls.conversation_id
-      LEFT JOIN messages origin
-        ON origin.id = tool_calls.message_id
-       AND origin.conversation_id = tool_calls.conversation_id
       WHERE conversations.user_id = ?
         AND tool_calls.tool_name = ?
         AND ${dateFilter}
@@ -306,9 +288,6 @@ export function listHistoricalSearches({
       FROM tool_calls
       JOIN conversations
         ON conversations.id = tool_calls.conversation_id
-      LEFT JOIN messages origin
-        ON origin.id = tool_calls.message_id
-       AND origin.conversation_id = tool_calls.conversation_id
       WHERE conversations.user_id = ?
         AND tool_calls.tool_name = ?
         AND ${dateFilter}
@@ -375,7 +354,18 @@ export function getTurnHistory(userId, turnId) {
     ORDER BY search_results.retrieved_at ASC, search_results.rowid ASC
   `).all(userId, turnId);
 
-  return { messages, toolCalls, searchResults };
+  const fetchResults = db.prepare(`
+    SELECT fetch_results.*
+    FROM fetch_results
+    JOIN tool_calls ON tool_calls.id = fetch_results.tool_call_id
+    JOIN conversations ON conversations.id = fetch_results.conversation_id
+    WHERE conversations.user_id = ?
+      AND tool_calls.turn_id = ?
+      AND tool_calls.conversation_id = fetch_results.conversation_id
+    ORDER BY fetch_results.retrieved_at ASC, fetch_results.rowid ASC
+  `).all(userId, turnId);
+
+  return { messages, toolCalls, searchResults, fetchResults };
 }
 
 export function listRecentMessages(conversationId, { limit = 20, offset = 0 } = {}) {
@@ -467,17 +457,41 @@ export function createToolCall({
   argumentsJson,
   status = 'pending',
   startedAt = nowUtc(),
+  timezone,
   id = createId(),
 }) {
+  const startedAtUtc = new Date(startedAt).toISOString();
+  const conversation = db.prepare(`
+    SELECT users.timezone
+    FROM conversations
+    JOIN users ON users.id = conversations.user_id
+    WHERE conversations.id = ?
+  `).get(conversationId);
+  if (!conversation) {
+    throw new Error(`Conversation not found: ${conversationId}`);
+  }
+  const executionTimezone = timezone ?? conversation.timezone;
+  const localDate = localDateForTimezone(startedAtUtc, executionTimezone);
   const serializedArguments = typeof argumentsJson === 'string'
     ? argumentsJson
     : JSON.stringify(argumentsJson);
   db.prepare(`
     INSERT INTO tool_calls (
       id, conversation_id, message_id, turn_id, tool_name,
-      arguments_json, status, started_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, conversationId, messageId, turnId, toolName, serializedArguments, status, startedAt);
+      arguments_json, status, started_at, local_date, timezone
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    conversationId,
+    messageId,
+    turnId,
+    toolName,
+    serializedArguments,
+    status,
+    startedAtUtc,
+    localDate,
+    executionTimezone,
+  );
   return findToolCallById(id);
 }
 
@@ -511,6 +525,16 @@ export function completeToolCall(id, { status = 'completed', resultSummary = nul
 
 export function listToolCallsByTurn(turnId) {
   return db.prepare('SELECT * FROM tool_calls WHERE turn_id = ? ORDER BY started_at').all(turnId);
+}
+
+export function listToolCallsByTurnForUser(userId, turnId) {
+  return db.prepare(`
+    SELECT tool_calls.*
+    FROM tool_calls
+    JOIN conversations ON conversations.id = tool_calls.conversation_id
+    WHERE conversations.user_id = ? AND tool_calls.turn_id = ?
+    ORDER BY tool_calls.started_at ASC, tool_calls.rowid ASC
+  `).all(userId, turnId);
 }
 
 export function listToolCallsByConversation(conversationId) {
@@ -569,6 +593,71 @@ export function listSearchResultsByConversationTurn(conversationId, turnId) {
     WHERE conversation_id = ? AND turn_id = ?
     ORDER BY retrieved_at
   `).all(conversationId, turnId);
+}
+
+export function insertFetchResult({
+  toolCallId,
+  conversationId,
+  turnId = null,
+  url,
+  finalUrl = null,
+  title = null,
+  content = null,
+  contentFormat = 'markdown',
+  contentHash = null,
+  status,
+  httpStatus = null,
+  errorMessage = null,
+  retrievedAt = nowUtc(),
+  id = createId(),
+}) {
+  db.prepare(`
+    INSERT INTO fetch_results (
+      id, tool_call_id, conversation_id, turn_id, url, final_url, title,
+      content, content_format, content_hash, status, http_status,
+      error_message, retrieved_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    toolCallId,
+    conversationId,
+    turnId,
+    url,
+    finalUrl,
+    title,
+    content,
+    contentFormat,
+    contentHash,
+    status,
+    httpStatus,
+    errorMessage,
+    retrievedAt,
+  );
+  return findFetchResultById(id);
+}
+
+export function findFetchResultById(id) {
+  return db.prepare('SELECT * FROM fetch_results WHERE id = ?').get(id);
+}
+
+export function listFetchResultsByToolCall(toolCallId) {
+  return db.prepare(`
+    SELECT * FROM fetch_results
+    WHERE tool_call_id = ?
+    ORDER BY retrieved_at ASC, rowid ASC
+  `).all(toolCallId);
+}
+
+export function listFetchResultsByToolCalls(toolCallIds) {
+  if (toolCallIds.length === 0) {
+    return [];
+  }
+  const placeholders = toolCallIds.map(() => '?').join(', ');
+  return db.prepare(`
+    SELECT * FROM fetch_results
+    WHERE tool_call_id IN (${placeholders})
+    ORDER BY retrieved_at ASC, rowid ASC
+  `).all(...toolCallIds);
 }
 
 export function upsertDigest({ userId, localDate, summary, messageCount, id = createId() }) {

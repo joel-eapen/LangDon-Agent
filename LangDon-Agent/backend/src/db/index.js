@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { applyMigrations } from './migrations.js';
 import { schema } from './schema.js';
 
 const configuredPath = process.env.DB_PATH || './data/langdon.sqlite';
@@ -14,6 +15,7 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
 db.exec(schema);
+applyMigrations(db);
 db.exec(`INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')`);
 
 const userColumns = db.prepare('PRAGMA table_info(users)').all();
